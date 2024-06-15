@@ -11,3 +11,12 @@ of TCP and UDP endpoints, for debugging.
 
 Licence: MirBSD <https://mbsd.evolvis.org/MirOS-Licence.htm>
 Published by: Qvest Digital <https://www.qvest-digital.com/>
+
+To compile, make sure Docker, git and mksh are installed,
+then run ./Build.sh to produce a saachenzip:latest image.
+
+To run the WIP, use:
+$ docker run --rm saachenzip:latest
+
+You might need --security-opt apparmor=unconfined if you
+don’t have apparmour enabled (see the comment in Build.sh).
