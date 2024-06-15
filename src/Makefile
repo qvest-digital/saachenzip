@@ -19,7 +19,12 @@ ${PROG}: ${OBJS}
 .c.o:
 	${CC} ${CPPFLAGS} ${CFLAGS} -c $<
 
-CLEANFILES+=	${OBJS} ${PROG}
+.c.i:
+	${CC} ${CPPFLAGS} ${CFLAGS} -E -o $@ $<
+
+CLEANFILES+=	${OBJS} ${PROG} ${SRCS:.c=.i}
 
 clean:
 	-rm -f ${CLEANFILES}
+
+.SUFFIXES: .c .i .o

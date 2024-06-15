@@ -2,7 +2,7 @@
 # -*- mode: sh -*-
 # © Thorsten Glaser, DTAG LLCTO, Qvest Digital Ⓕ MirBSD
 
-export LC_ALL=C
+export LC_ALL=C TZ=UTC
 unset LANGUAGE
 set -exo pipefail
 

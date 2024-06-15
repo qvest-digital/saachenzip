@@ -7,16 +7,87 @@ https://github.com/qvest-digital/saachenzip
 Tiny static container that just returns the IP addresses
 of TCP and UDP endpoints, for debugging.
 
-⚠ Currently WIP.
-
 Licence: MirBSD <https://mbsd.evolvis.org/MirOS-Licence.htm>
 Published by: Qvest Digital <https://www.qvest-digital.com/>
 
 To compile, make sure Docker, git and mksh are installed,
 then run ./Build.sh to produce a saachenzip:latest image.
+The image has no dependencies and is very tiny; publish to
+where it’s needed.
 
-To run the WIP, use:
-$ docker run --rm saachenzip:latest
+To run, use something like:
+
+$ docker run --rm -p 1024/tcp -p 1024/udp --name tellmyip -d saachenzip:latest
+$ docker inspect tellmyip | sed -n '/^.*"IPAddress": "\(.*\)",*$/s//\1/p' | sort -u
+ ⇒ this outputs the IP address of the container, e.g. 172.17.0.2
+$ docker logs -tf tellmyip
+ … use it (see below)
+$ docker stop tellmyip
 
 You might need --security-opt apparmor=unconfined if you
 don’t have apparmour enabled (see the comment in Build.sh).
+
+Another possibility is with host networking and specifying
+the port(s) manually (multiple possible, default 1024):
+
+$ docker run --net=host --rm --name tellmyip -d saachenzip:latest \
+      /saachenzip 2001 2002 2003 ::/2004 127.0.0.1/2005
+$ docker logs -tf tellmyip
+ … use it (see below)
+$ docker stop tellmyip
+
+The container runs as nōn-root by default so can only use
+ports 1024‥65535.
+
+With regular networking, you can trigger a response by sending
+a dummy message (one short packet whose content is ignored) over
+TCP or UDP to the container IP:
+
+$ echo x | nc 172.17.0.2 1024
+
+UDP, in theory, works the same but is often broken in Docker.
+
+Using host networking, the ports are bound on the host, so:
+
+$ echo x | nc 127.0.0.1 2001
+$ echo x | nc ::1 2002
+$ echo x | nc -uw1 127.0.0.1 2003
+
+The author’s Docker version also seems to have broken UDP but
+only over IPv6 for host networking. *sigh…*
+
+The responses are plaintext JSON currently as follows:
+
+{
+  "client-l3": "IPv4",		// or IPv6, or a protocol number
+  "client-l4": "tcp",		// or udp
+  "client-host": "172.17.0.1",	// IPv6 or Legacy IP address*
+  "client-port": "42150",	// OSI L4 port number
+  "server-l3": "IPv4",
+  "server-l4": "tcp",
+  "server-host": "172.17.0.2",
+  "server-port": "1024",
+  "timestamp": 1718483209.876615 // gettimeofday(2)
+}
+
+client-l3 can be IPv4 and server-l3 can be IPv6 at the same time
+if v4-mapped or (*shudder…*) NAT64 are used. *-l3 can be IPv4 but
+*-host an IPv6 address, for similar cases.
+
+In case of trouble, *-host can be "(unknown)", *-port "(???)".
+
+timestamp is normally POSIX time_t in microsecond accuracy, that
+is, seconds since 1970 minus the amount of leap seconds since 1970
+(i.e. days have constant 86400 seconds).
+
+The image was developed assuming a Docker Linux/amd64 runtime, the
+binary would be compiled using musl libc for sanity. It most likely
+is portable to other architectures if not common operating systems.
+
+┌───────────────────────────┐
+│ How do I pronounce… t̲h̲a̲t̲‽ │
+└───────────────────────────┘
+
+    ↓rasp
+Suh-khents Ee Peh Addressə
+ ↑long vowel
