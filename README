@@ -1,0 +1,13 @@
+https://github.com/qvest-digital/saachenzip
+
+┌────────────────────┐
+│ Sāchenz IP-Adresse │
+└────────────────────┘
+
+Tiny static container that just returns the IP addresses
+of TCP and UDP endpoints, for debugging.
+
+⚠ Currently WIP.
+
+Licence: MirBSD <https://mbsd.evolvis.org/MirOS-Licence.htm>
+Published by: Qvest Digital <https://www.qvest-digital.com/>

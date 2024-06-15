@@ -12,6 +12,6 @@ gcc -D_GNU_SOURCE \
     -g -O2 -Wall -Wextra -Wformat -Werror=format-security \
     -Werror=implicit-function-declaration \
     -fstack-protector-strong -fstack-clash-protection -fcf-protection \
-    -Wl,-z,relro -Wl,-z,now -Wl,-z,text -fPIE -static-pie \
+    -Wl,-z,relro -Wl,-z,now -Wl,-z,text -Wl,-O2 -fPIE -static-pie \
     -o saachenzip saachenzip.c
 : ok
