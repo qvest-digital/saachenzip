@@ -44,6 +44,7 @@ static const char licence_header[] __attribute__((__used__)) =
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include "mbsdcc.h"
 #include "mbsdint.h"
@@ -95,6 +96,7 @@ static void handle_fd(int);
 static const char protoname[2][4] = { "udp", "tcp" };
 
 static volatile sig_atomic_t gotsig;
+static unsigned char fauxhttp;
 
 #define cscpy(dst,src) memcpy(dst, src, sizeof(src))
 
@@ -244,11 +246,15 @@ doconf(struct configuration *confp, char **argv, int argc)
 	maxfd = 0;
 	fdnby = 0;
 
-	if (argc < 2)
-		errx(1, "Usage: %s [<host>/]<port> […]",
+	if (argc < 2 || (argc < 3 && argv[1][0] == 'H' && !argv[1][1]))
+		errx(1, "Usage: %s [H] [<host>/]<port> […]",
 		    argc > 0 && *argv && **argv ? *argv : "saachenzip");
 
 	j = 0;
+	if (argv[1][0] == 'H' && !argv[1][1]) {
+		++j;
+		fauxhttp = 1;
+	}
 	while (++j < argc) {
 		if (!(cp = strdup(argv[j])))
 			err(1, "strdup");
@@ -376,6 +382,8 @@ static void
 handle_fd(int fd)
 {
 	static char buf[1024];
+	static char hdrbuf[160];
+	static char tmbuf[32];
 	int i;
 	unsigned char istcp;
 	socklen_t saclen, saslen;
@@ -390,6 +398,8 @@ handle_fd(int fd)
 	char shost[INET6_ADDRSTRLEN], chost[INET6_ADDRSTRLEN];
 	char sport[6], cport[6];
 	char sfamily[LKFAMILYLEN], cfamily[LKFAMILYLEN];
+
+	hdrbuf[0] = '\0';
 
 	saclen = sizeof(i);
 	errno = EILSEQ;
@@ -442,8 +452,60 @@ handle_fd(int fd)
 		tv.tv_sec = -1;
 		tv.tv_usec = 0;
 	}
+	if (fauxhttp) {
+		struct tm *tm;
+
+		/* avoid strftime to avoid timezone dependency */
+		errno = ETXTBSY;
+		if ((tm = gmtime(&tv.tv_sec))) {
+			/* RFC-mandated exact strings and UTC */
+			static const char xday[8][4] = {
+				"Sun", "Mon", "Tue", "Wed",
+				"Thu", "Fri", "Sat", "Sun",
+			};
+			static const char xmonth[12][4] = {
+				"Jan", "Feb", "Mar", "Apr",
+				"May", "Jun", "Jul", "Aug",
+				"Sep", "Oct", "Nov", "Dec",
+			};
+			if (tm->tm_mon < 0 || tm->tm_mon > 11 ||
+			    tm->tm_wday < 0 || tm->tm_wday > 7 ||
+			    /* HTTP-mandated limits */
+			    tm->tm_year < -1899 || tm->tm_year > 8099) {
+				warnx("out-of-spec struct tm");
+				goto fallbacktime;
+			}
+			if (tm->tm_sec > 59)
+				tm->tm_sec = 59; /* wrong but HTTP-mandated */
+			errno = ETXTBSY;
+			i = snprintf(tmbuf, sizeof(tmbuf),
+			    "%s, %02d %s %04d %02d:%02d:%02d GMT",
+			    xday[tm->tm_wday], tm->tm_mday,
+			    xmonth[tm->tm_mon], (int)(tm->tm_year + 1900),
+			    tm->tm_hour, tm->tm_min, tm->tm_sec);
+			if (i < 1 || (size_t)i >= sizeof(tmbuf)) {
+				warn("snprintf%s", ", using dummy time");
+				goto fallbacktime;
+			}
+		} else {
+			warn("gmtime");
+ fallbacktime:
+			cscpy(tmbuf, "Wed, 31 Dec 1969 23:59:59 GMT");
+		}
+		errno = ETXTBSY;
+		i = snprintf(hdrbuf, sizeof(hdrbuf),
+		    "HTTP/1.0 200 OK\r\n"
+		    "Date: %s\r\n"
+		    "Expires: %s\r\n"
+		    "Content-Type: text/plain; charset=UTF-8\r\n"
+		    "\r\n", tmbuf, tmbuf);
+		if (i < 1 || (size_t)i >= sizeof(hdrbuf)) {
+			warn("snprintf%s", ", using mini header");
+			cscpy(hdrbuf, "HTTP/1.0 200 uh-oh\r\n\r\n");
+		}
+	}
 	errno = ETXTBSY;
-	i = snprintf(buf, sizeof(buf),
+	i = snprintf(buf, sizeof(buf), "%s"
 	    "{\n  \"client-l3\": \"%s\""
 	    ",\n  \"client-l4\": \"%s\""
 	    ",\n  \"client-host\": \"%s\""
@@ -453,7 +515,7 @@ handle_fd(int fd)
 	    ",\n  \"server-host\": \"%s\""
 	    ",\n  \"server-port\": \"%s\""
 	    ",\n  \"timestamp\": %lld.%06ld"
-	     "\n}\n",
+	     "\n}\n", hdrbuf,
 	    cfamily, protoname[istcp], chost, cport,
 	    sfamily, protoname[istcp], shost, sport,
 	    (long long)tv.tv_sec, (long)tv.tv_usec);

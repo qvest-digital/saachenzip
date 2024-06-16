@@ -17,7 +17,9 @@ where it’s needed.
 
 To run, use something like:
 
-$ docker run --rm -p 1024/tcp -p 1024/udp --name tellmyip -d saachenzip:latest
+$ docker run --rm --name tellmyip -d \
+      -p 1024/tcp -p 1024/udp \
+      saachenzip:latest
 $ docker inspect tellmyip | sed -n '/^.*"IPAddress": "\(.*\)",*$/s//\1/p' | sort -u
  ⇒ this outputs the IP address of the container, e.g. 172.17.0.2
 $ docker logs -tf tellmyip
@@ -30,7 +32,9 @@ don’t have apparmour enabled (see the comment in Build.sh).
 Another possibility is with host networking and specifying
 the port(s) manually (multiple possible, default 1024):
 
-$ docker run --net=host --rm --name tellmyip -d saachenzip:latest \
+$ docker run --rm --name tellmyip -d \
+      --net=host \
+      saachenzip:latest \
       /saachenzip 2001 2002 2003 ::/2004 127.0.0.1/2005
 $ docker logs -tf tellmyip
  … use it (see below)
@@ -79,6 +83,15 @@ In case of trouble, *-host can be "(unknown)", *-port "(???)".
 timestamp is normally POSIX time_t in microsecond accuracy, that
 is, seconds since 1970 minus the amount of leap seconds since 1970
 (i.e. days have constant 86400 seconds).
+
+If HTTP responses are desired invoke as above with explicit ports
+and pass a sole ‘H’ (uppercase) as first argument to enable:
+
+$ docker run --rm --name tellmyip -d \
+      -p 1024/tcp -p 1024/udp \
+      saachenzip:latest \
+      /saachenzip H 1024
+$ curl http://172.17.0.2:1024/
 
 The image was developed assuming a Docker Linux/amd64 runtime, the
 binary would be compiled using musl libc for sanity. It most likely
