@@ -76,7 +76,8 @@ The responses are plaintext JSON currently as follows:
 
 client-l3 can be IPv4 and server-l3 can be IPv6 at the same time
 if v4-mapped or (*shudder…*) NAT64 are used. *-l3 can be IPv4 but
-*-host an IPv6 address, for similar cases.
+*-host an IPv6 address, for similar cases. There can be an extra
+lnx.specdst member for UDP on Solaris and Linux.
 
 In case of trouble, *-host can be "(unknown)", *-port "(???)".
 

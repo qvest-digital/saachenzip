@@ -33,6 +33,7 @@ static const char licence_header[] __attribute__((__used__)) =
 #include <sys/param.h>
 #include <sys/time.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -71,10 +72,43 @@ static const char other_ids[] __attribute__((__used__)) =
 #define NIF_FQDN NI_NAMEREQD | NI_NUMERICSERV
 #endif
 
+#ifdef AI_ADDRCONFIG
+#define AIxADDRCONFIG AI_ADDRCONFIG
+#else
+#define AIxADDRCONFIG 0
+#endif
+
 #ifdef SO_REUSEPORT
 #define ECNBITS_REUSEPORT SO_REUSEPORT
+#define ECNBITSnREUSEPORT "SO_REUSEPORT"
 #else
 #define ECNBITS_REUSEPORT SO_REUSEADDR
+#define ECNBITSnREUSEPORT "SO_REUSEADDR"
+#endif
+
+#if defined(IP_RECVPKTINFO)
+#define pkti4_recv IP_RECVPKTINFO
+#define pkti4nrecv "IP_RECVPKTINFO"
+#elif defined(IP_PKTINFO)
+#define pkti4_recv IP_PKTINFO
+#define pkti4nrecv "IP_PKTINFO"
+#elif defined(IP_RECVDSTADDR)
+#define pkti4_recv IP_RECVDSTADDR
+#define pkti4nrecv "IP_RECVDSTADDR"
+#endif
+
+#if defined(AF_INET6) && defined(IPPROTO_IPV6)
+#if defined(IPV6_RECVPKTINFO)
+#define pkti6_recv IPV6_RECVPKTINFO
+#define pkti6nrecv "IPV6_RECVPKTINFO"
+#elif defined(IPV6_PKTINFO)
+#define pkti6_recv IPV6_PKTINFO
+#define pkti6nrecv "IPV6_PKTINFO"
+#endif
+#endif
+
+#ifndef INET6_ADDRSTRLEN
+#define INET6_ADDRSTRLEN 64
 #endif
 
 struct configuration {
@@ -88,15 +122,27 @@ struct configuration {
 	int maxfd_m;
 };
 
+union sockun {
+	struct sockaddr sa;
+	struct sockaddr_in sin;
+#ifdef AF_INET6
+	struct sockaddr_in6 sin6;
+#endif
+	struct sockaddr_storage ss;
+};
+
 static void sighandler(int);
 static void doconf(struct configuration *, char **, int);
 static const char *revlookup(const struct sockaddr *, socklen_t);
 static void handle_fd(int);
+static int recvudp(int, void *, size_t, union sockun *, socklen_t *,
+    union sockun *, socklen_t *);
 
 static const char protoname[2][4] = { "udp", "tcp" };
 
 static volatile sig_atomic_t gotsig;
 static unsigned char fauxhttp;
+static char specdstbuf[40];
 
 #define cscpy(dst,src) memcpy(dst, src, sizeof(src))
 
@@ -144,6 +190,7 @@ main(int argc, char *argv[])
 #undef confp
 }
 
+#ifdef AF_INET6
 static const unsigned char v4mapped[12] = {
 	0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00,
@@ -160,6 +207,7 @@ static const unsigned char nat64nsp[6] = {
 	0x00, 0x64, 0xFF, 0x9B,
 	0x00, 0x01,
 };
+#endif
 
 /* over-estimate decimal as octal */
 #define LKmax(a,b) ((a) > (b) ? (a) : (b))
@@ -233,8 +281,9 @@ doconf(struct configuration *confp, char **argv, int argc)
 	unsigned char pmask;
 	char *cp, *host, *service;
 	struct addrinfo *ai, *ap, ar;
-	struct sigaction sa = {0};
+	struct sigaction sa;
 
+	memset(&sa, '\0', sizeof(sa));
 	sigemptyset(&sa.sa_mask);
 	sa.sa_handler = &sighandler;
 	if (sigaction(SIGTERM, &sa, NULL))
@@ -287,7 +336,7 @@ doconf(struct configuration *confp, char **argv, int argc)
 			pmask |= 2;
 			ar.ai_socktype = SOCK_DGRAM;
 		}
-		ar.ai_flags = AI_ADDRCONFIG | AI_PASSIVE; /* no AI_V4MAPPED either */
+		ar.ai_flags = AIxADDRCONFIG | AI_PASSIVE; /* no AI_V4MAPPED either */
 		i = getaddrinfo(host, service, &ar, &ai);
 		switch (i) {
 		case EAI_NONAME:
@@ -331,8 +380,42 @@ doconf(struct configuration *confp, char **argv, int argc)
 				i = errno;
 				putc('\n', stderr);
 				errno = i;
-				warn("setsockopt");
+				warn("setsockopt %s", ECNBITSnREUSEPORT);
 			}
+
+#if defined(pkti4_recv) || defined(pkti6_recv)
+			if ((pmask & 2)) {
+				i = 1;
+				switch (ap->ai_family) {
+#ifdef pkti6_recv
+				case AF_INET6:
+					if (setsockopt(s, IPPROTO_IPV6,
+					    pkti6_recv,
+					    (const void *)&i, sizeof(i))) {
+						i = errno;
+						putc('\n', stderr);
+						errno = i;
+						warn("setsockopt %s",
+						    pkti6nrecv);
+					}
+					break;
+#endif
+#ifdef pkti4_recv
+				case AF_INET:
+					if (setsockopt(s, IPPROTO_IP,
+					    pkti4_recv,
+					    (const void *)&i, sizeof(i))) {
+						i = errno;
+						putc('\n', stderr);
+						errno = i;
+						warn("setsockopt %s",
+						    pkti4nrecv);
+					}
+					break;
+#endif
+				}
+			}
+#endif
 
 			if (bind(s, ap->ai_addr, ap->ai_addrlen)) {
 				i = errno;
@@ -387,12 +470,7 @@ handle_fd(int fd)
 	int i;
 	unsigned char istcp;
 	socklen_t saclen, saslen;
-	union {
-		struct sockaddr sa;
-		struct sockaddr_in sin;
-		struct sockaddr_in6 sin6;
-		struct sockaddr_storage ss;
-	} saclient, saserver;
+	union sockun saclient, saserver;
 	ssize_t z;
 	struct timeval tv;
 	char shost[INET6_ADDRSTRLEN], chost[INET6_ADDRSTRLEN];
@@ -400,6 +478,7 @@ handle_fd(int fd)
 	char sfamily[LKFAMILYLEN], cfamily[LKFAMILYLEN];
 
 	hdrbuf[0] = '\0';
+	specdstbuf[0] = '\0';
 
 	saclen = sizeof(i);
 	errno = EILSEQ;
@@ -434,10 +513,9 @@ handle_fd(int fd)
 			return;
 		}
 		saclen = sizeof(saclient);
-		if (recvfrom(fd, buf, sizeof(buf), 0, &saclient.sa, &saclen) < 0) {
-			warn("recvfrom(%d)", fd);
+		if (recvudp(fd, buf, sizeof(buf), &saclient, &saclen,
+		    &saserver, &saslen))
 			return;
-		}
 		break;
 	default:
 		warnx("fd %d: unknown socket type: %d", fd, i);
@@ -510,6 +588,7 @@ handle_fd(int fd)
 	    ",\n  \"client-l4\": \"%s\""
 	    ",\n  \"client-host\": \"%s\""
 	    ",\n  \"client-port\": \"%s\""
+	    "%s"
 	    ",\n  \"server-l3\": \"%s\""
 	    ",\n  \"server-l4\": \"%s\""
 	    ",\n  \"server-host\": \"%s\""
@@ -517,6 +596,7 @@ handle_fd(int fd)
 	    ",\n  \"timestamp\": %lld.%06ld"
 	     "\n}\n", hdrbuf,
 	    cfamily, protoname[istcp], chost, cport,
+	    specdstbuf,
 	    sfamily, protoname[istcp], shost, sport,
 	    (long long)tv.tv_sec, (long)tv.tv_usec);
 	if (i < 1) {
@@ -525,6 +605,7 @@ handle_fd(int fd)
 	}
 	if ((size_t)i >= sizeof(buf))
 		warnx("snprintf%s", " truncated");
+	fprintf(stderr, "Response: %s", buf + strlen(hdrbuf));
 	z = istcp ? write(fd, buf, (size_t)i) :
 	    sendto(fd, buf, (size_t)i, 0, &saclient.sa, saclen);
 	if (z == -1)
@@ -535,3 +616,185 @@ handle_fd(int fd)
 	if (istcp)
 		close(fd);
 }
+
+#if !defined(pkti4_recv) && !defined(pkti6_recv)
+#warning server IP may be imprecise
+static int
+recvudp(int fd, void *buf, size_t len, union sockun *sac, socklen_t *zac,
+    union sockun *sas __attribute__((__unused__)),
+    socklen_t *zas __attribute__((__unused__)))
+{
+	if (recvfrom(fd, buf, len, 0, &(sac->sa), zac) < 0) {
+		warn("recvfrom(%d)", fd);
+		return (1);
+	}
+	return (0);
+}
+#else
+#define cmsgtype1
+#define cmsgtype2
+#define cmsgtype3
+#define cmsgtype4
+#define cmsgtype cmsgtype1 cmsgtype2 cmsgtype3 cmsgtype4 "(unknown cmsg_type)"
+static int
+recvudp(int fd, void *buf, size_t len, union sockun *sac, socklen_t *zac,
+    union sockun *sas, socklen_t *zas __attribute__((__unused__)))
+{
+	struct msghdr m;
+	struct iovec io;
+	char cmsgbuf[64];
+	struct cmsghdr *cmsg;
+	unsigned int found = 0;
+
+	if (
+#ifdef AF_INET6
+	    sas->sa.sa_family != AF_INET6 &&
+#endif
+	    sas->sa.sa_family != AF_INET) {
+		if (recvfrom(fd, buf, len, 0, &(sac->sa), zac) < 0) {
+			warn("recvfrom(%d)", fd);
+			return (1);
+		}
+		return (0);
+	}
+
+	memset(&m, 0, sizeof(m));
+	memset(&io, 0, sizeof(io));
+
+	io.iov_base = buf;
+	io.iov_len = len;
+
+	m.msg_name = &(sac->sa);
+	m.msg_namelen = *zac;
+	m.msg_iov = &io;
+	m.msg_iovlen = 1;
+	m.msg_control = cmsgbuf;
+	m.msg_controllen = sizeof(cmsgbuf);
+	m.msg_flags = 0;
+
+	if (recvmsg(fd, &m, 0) < 0) {
+		warn("recvmsg(%d)", fd);
+		return (1);
+	}
+	*zac = m.msg_namelen;
+	if ((m.msg_flags & MSG_CTRUNC))
+		warnx("CMSG truncated");
+	for (cmsg = CMSG_FIRSTHDR(&m);
+	     cmsg != NULL;
+	     cmsg = CMSG_NXTHDR(&m, cmsg)) {
+		switch (cmsg->cmsg_level) {
+#ifdef pkti4_recv
+		case IPPROTO_IP:
+			if (sas->sa.sa_family != AF_INET) {
+				warnx("%s CMSG outside of %s ignored",
+				    "IPPROTO_IP", "AF_INET");
+				continue;
+			}
+			switch (cmsg->cmsg_type) {
+			/* maybe also, later, obtain iptos? */
+#if defined(IP_RECVPKTINFO) || defined(IP_PKTINFO)
+#ifdef IP_RECVPKTINFO
+#undef cmsgtype1
+#define cmsgtype1 cmsg->cmsg_type == IP_RECVPKTINFO ? "IP_RECVPKTINFO" :
+			case IP_RECVPKTINFO: /* legacy NetBSD */
+#endif
+#ifdef IP_PKTINFO
+#undef cmsgtype2
+#define cmsgtype2 cmsg->cmsg_type == IP_PKTINFO ? "IP_PKTINFO" :
+			case IP_PKTINFO:
+#endif
+				if (cmsg->cmsg_len == CMSG_LEN(sizeof(struct in_pktinfo))) {
+					struct in_pktinfo *ipi;
+					int i;
+
+					ipi = (void *)CMSG_DATA(cmsg);
+					memcpy(&(sas->sin.sin_addr),
+					    &(ipi->ipi_addr),
+					    sizeof(struct in_addr));
+					++found;
+#if defined(__linux__) || \
+    (defined(__sun__) && defined(__svr4__)) || \
+    (defined(__sun) && defined(__SVR4))
+					errno = ETXTBSY;
+					i = snprintf(specdstbuf, sizeof(specdstbuf),
+					    ",\n  \"lnx.specdst\": \"%s\"",
+					    inet_ntoa(ipi->ipi_spec_dst));
+					if (i < 1 || (size_t)i >= sizeof(specdstbuf)) {
+						warn("ipi_spec_dst snprintf: %s",
+						    inet_ntoa(ipi->ipi_spec_dst));
+						specdstbuf[0] = '\0';
+					}
+#endif
+				} else
+					warnx("unexpected %s length %zu not %zu, ignored",
+					    cmsgtype,
+					    (size_t)cmsg->cmsg_len,
+					    (size_t)CMSG_LEN(sizeof(struct in_pktinfo)));
+				break;
+#endif /* defined(IP_RECVPKTINFO) || defined(IP_PKTINFO) */
+#ifdef IP_RECVDSTADDR
+			case IP_RECVDSTADDR:
+				if (cmsg->cmsg_len == CMSG_LEN(sizeof(struct in_addr))) {
+					memcpy(&(sas->sin.sin_addr),
+					    CMSG_DATA(cmsg),
+					    sizeof(struct in_addr));
+					++found;
+				} else
+					warnx("unexpected %s length %zu not %zu, ignored",
+					    "IP_RECVDSTADDR",
+					    (size_t)cmsg->cmsg_len,
+					    (size_t)CMSG_LEN(sizeof(struct in_addr)));
+				break;
+#endif /* IP_RECVDSTADDR */
+			}
+			break; /* case IPPROTO_IP */
+#endif /* pkti4_recv */
+#ifdef pkti6_recv
+		case IPPROTO_IPV6:
+			if (sas->sa.sa_family != AF_INET6) {
+				warnx("%s CMSG outside of %s ignored",
+				    "IPPROTO_IPV6", "AF_INET6");
+				continue;
+			}
+			switch (cmsg->cmsg_type) {
+			/* maybe also, later, obtain iptos? */
+#ifdef IPV6_RECVPKTINFO
+#undef cmsgtype3
+#define cmsgtype3 cmsg->cmsg_type == IPV6_RECVPKTINFO ? "IPV6_RECVPKTINFO" :
+			case IPV6_RECVPKTINFO:
+#endif
+#ifdef IPV6_PKTINFO
+#undef cmsgtype4
+#define cmsgtype4 cmsg->cmsg_type == IPV6_PKTINFO ? "IPV6_PKTINFO" :
+			case IPV6_PKTINFO:
+#endif
+				if (cmsg->cmsg_len == CMSG_LEN(sizeof(struct in6_pktinfo))) {
+					struct in6_pktinfo *i6pi;
+
+					i6pi = (void *)CMSG_DATA(cmsg);
+					memcpy(&(sas->sin6.sin6_addr),
+					    &(i6pi->ipi6_addr),
+					    sizeof(struct in6_addr));
+#ifdef IN6_IS_ADDR_LINKLOCAL
+					/* KAME */
+					if (IN6_IS_ADDR_LINKLOCAL(&(sas->sin6.sin6_addr)))
+						sas->sin6.sin6_scope_id =
+						    i6pi->ipi6_ifindex;
+#endif
+					++found;
+				} else
+					warnx("unexpected %s length %zu not %zu, ignored",
+					    cmsgtype,
+					    (size_t)cmsg->cmsg_len,
+					    (size_t)CMSG_LEN(sizeof(struct in6_pktinfo)));
+				break;
+			}
+			break; /* case IPPROTO_IPV6 */
+#endif /* pkti6_recv */
+		}
+	}
+	if (found != 1)
+		warnx("found %u server-host CMSGs", found);
+	return (0);
+}
+#endif
