@@ -6,6 +6,8 @@ ARG gitdescribe=unknown
 
 MAINTAINER Thorsten Glaser <t.glaser@qvest-digital.com>
 LABEL git-describe="$gitdescribe"
+LABEL org.opencontainers.image.source=https://github.com/qvest-digital/saachenzip
+LABEL org.opencontainers.image.licenses=MirOS
 
 COPY ["saachenzip", "/"]
 
