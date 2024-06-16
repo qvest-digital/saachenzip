@@ -96,6 +96,8 @@ static const char protoname[2][4] = { "udp", "tcp" };
 
 static volatile sig_atomic_t gotsig;
 
+#define cscpy(dst,src) memcpy(dst, src, sizeof(src))
+
 static void
 sighandler(int signo __attribute__((__unused__)))
 {
@@ -179,24 +181,24 @@ dolookup(char host[static INET6_ADDRSTRLEN],
 			/* FALLTHROUGH */
 	default:
 		  warnx("%s: %s", "getnameinfo", gai_strerror(i));
-		memcpy(host, "(unknown)", sizeof("(unknown)"));
-		memcpy(port, "(?""?""?)", sizeof("(?""?""?)"));
+		cscpy(host, "(unknown)");
+		cscpy(port, "(?""?""?)");
 		break;
 	case 0:
 		break;
 	}
 	if (addr->sa_family == AF_INET) {
-		memcpy(family, "IPv4", sizeof("IPv4"));
+		cscpy(family, "IPv4");
 #ifdef AF_INET6
 #define isNet(net) \
 	(!memcmp(net, \
 	    ((const struct sockaddr_in6 *)addr)->sin6_addr.s6_addr, \
 	    sizeof(net)))
 	} else if (addr->sa_family == AF_INET6) {
-		memcpy(family, "IPv6", sizeof("IPv6"));
+		cscpy(family, "IPv6");
 		if (isNet(nat64) || isNet(nat64nsp) ||
 		    isNet(v4mapped))
-			memcpy(family, "IPv4", sizeof("IPv4"));
+			cscpy(family, "IPv4");
 #undef isNet
 #endif
 	} else if (mbiTYPE_ISU(sa_family_t)) {
@@ -216,7 +218,7 @@ revlookup(const struct sockaddr *addr, socklen_t addrlen)
 	char nf[LKFAMILYLEN];
 
 	if (dolookup(nh, np, nf, addr, addrlen))
-		memcpy(buf, "(unknown)", sizeof("(unknown)"));
+		cscpy(buf, "(unknown)");
 	else
 		snprintf(buf, sizeof(buf), "[%s]:%s", nh, np);
 	return (buf);
