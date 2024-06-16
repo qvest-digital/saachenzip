@@ -1,13 +1,13 @@
-# for dev-test builds (check for warnings) only
-
 PROG=		saachenzip
 SRCS?=		${PROG}.c
 OBJS?=		${SRCS:.c=.o}
 
 CC?=		gcc
 CPPFLAGS=	-D_GNU_SOURCE -Wdate-time -D_FORTIFY_SOURCE=2
-CFLAGS=		-g -O2 -Wall -Wextra -Wformat -Werror=format-security -Werror=implicit-function-declaration
-LDFLAGS=
+CFLAGS=		-g -O2 -Wall -Wextra -Wformat \
+		-Werror=format-security -Werror=implicit-function-declaration \
+		-fPIE
+LDFLAGS=	-Wl,-z,relro -Wl,-z,now -Wl,-z,text -Wl,-O2
 LIBS=
 LDSTATIC=
 
